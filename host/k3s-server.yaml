@@ -1,0 +1,59 @@
+#cloud-config
+# k3s server settings for Cozystack, written to /oem/90-k3s.yaml on each node.
+# The first server keeps "cluster-init: true"; the others replace it with
+# "server: https://<FIRST_SERVER_IP>:6443".
+k3s:
+  enabled: true
+  env:
+    K3S_TOKEN: "<CLUSTER_TOKEN>"
+
+stages:
+  boot.before:
+    # Flags live in config.yaml.d rather than in k3s args: the k3s installer
+    # escapes '*' in flags, which silently breaks the etcd snapshot cron.
+    - name: k3s server config
+      files:
+        - path: /etc/rancher/k3s/config.yaml.d/20-cozystack.yaml
+          permissions: 0600
+          content: |
+            cluster-init: true
+            node-ip: <NODE_IP>
+            node-external-ip: <NODE_EXTERNAL_IP>
+            tls-san:
+              - <FIRST_SERVER_IP>
+              - <API_HOSTNAME>
+            disable:
+              - traefik
+              - servicelb
+              - local-storage
+              - metrics-server
+              - runtimes
+              - gateway-api-crd
+            disable-network-policy: true
+            disable-kube-proxy: true
+            flannel-backend: none
+            cluster-domain: cozy.local
+            cluster-cidr: 10.42.0.0/16
+            service-cidr: 10.43.0.0/16
+            secrets-encryption: true
+            kubelet-arg:
+              - max-pods=220
+            etcd-arg:
+              - quota-backend-bytes=536870912
+              - auto-compaction-mode=periodic
+              - auto-compaction-retention=1h
+              - snapshot-count=10000
+            etcd-snapshot-schedule-cron: "0 */6 * * *"
+            etcd-snapshot-retention: 3
+  boot:
+    # /var/lib/rancher is persistent, so a file baked into the image at this
+    # path would be shadowed by the copy on disk.
+    - name: containerd CDI block-device ownership for KubeVirt
+      files:
+        - path: /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/10-cozystack-cri.toml
+          permissions: 0644
+          content: |
+            version = 3
+
+            [plugins.'io.containerd.cri.v1.runtime']
+              device_ownership_from_security_context = true

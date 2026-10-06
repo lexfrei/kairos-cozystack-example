@@ -1,0 +1,17 @@
+#cloud-config
+# Baked into AuroraBoot raw disks for both images.
+hostname: "cozy-{{ trunc 4 .MachineID }}"
+users:
+  - name: cozy
+    groups: [admin]
+    ssh_authorized_keys:
+      - "<SSH_PUBLIC_KEY>"
+stages:
+  network:
+    # A raw disk boots into recovery with no state partition; nobody is at the
+    # console on a cloud VM, so the first boot installs itself. Later recovery
+    # boots already have COS_STATE and are left alone.
+    - name: first-boot reset into the active system
+      if: '[ "$(kairos-agent state get boot)" = "recovery_boot" ] && [ -z "$(blkid -L COS_STATE)" ]'
+      commands:
+        - kairos-agent reset --unattended --reboot

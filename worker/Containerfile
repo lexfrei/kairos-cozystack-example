@@ -1,0 +1,61 @@
+# Kairos tenant worker on Hadron for Cozystack: kubelet + containerd only.
+# The node joins a Kamaji control plane through kubelet TLS bootstrap with a
+# bootstrap token, the same contract Cozystack's Talos workers use, so there
+# is no kubeadm and no k3s in the image.
+ARG HADRON_VERSION=v0.5.3
+ARG KAIROS_INIT=quay.io/kairos/kairos-init:v4.3.0
+
+FROM ${KAIROS_INIT} AS kairos-init
+
+# The upstream kubelet release binary links against glibc, and Hadron is musl,
+# so kubelet is built from source without cgo, as k3s does.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.25.11 AS kubelet
+ARG KUBERNETES_VERSION=v1.35.6
+ARG TARGETARCH
+WORKDIR /src
+RUN curl -fL "https://github.com/kubernetes/kubernetes/archive/refs/tags/${KUBERNETES_VERSION}.tar.gz" | tar -xz --strip-components=1
+RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -trimpath \
+      -ldflags "-s -w -X k8s.io/component-base/version.gitVersion=${KUBERNETES_VERSION} -X k8s.io/component-base/version.gitTreeState=clean" \
+      -o /out/kubelet ./cmd/kubelet
+
+FROM ghcr.io/kairos-io/hadron-toolchain:${HADRON_VERSION} AS fetch
+ARG TARGETARCH
+ARG CONTAINERD_VERSION=2.2.9
+ARG RUNC_VERSION=v1.5.2
+ARG CNI_PLUGINS_VERSION=v1.9.1
+WORKDIR /dest
+COPY --from=kubelet /out/kubelet usr/bin/kubelet
+RUN mkdir -p usr/bin usr/sbin opt/cni/bin usr/lib/systemd/system && \
+    curl -fL "https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-static-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz" -o /tmp/containerd.tgz && \
+    curl -fL "https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-static-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz.sha256sum" -o /tmp/containerd.sha && \
+    (cd /tmp && sed 's# .*#  containerd.tgz#' containerd.sha | sha256sum -c -) && \
+    tar -xzf /tmp/containerd.tgz -C usr && \
+    curl -fL "https://raw.githubusercontent.com/containerd/containerd/v${CONTAINERD_VERSION}/containerd.service" -o usr/lib/systemd/system/containerd.service && \
+    sed -i 's#/usr/local/bin/containerd#/usr/bin/containerd#' usr/lib/systemd/system/containerd.service && \
+    curl -fL "https://github.com/opencontainers/runc/releases/download/${RUNC_VERSION}/runc.${TARGETARCH}" -o usr/sbin/runc && \
+    chmod 0755 usr/sbin/runc && \
+    curl -fL "https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/cni-plugins-linux-${TARGETARCH}-${CNI_PLUGINS_VERSION}.tgz" -o /tmp/cni.tgz && \
+    tar -xzf /tmp/cni.tgz -C opt/cni/bin
+
+FROM ghcr.io/kairos-io/hadron:${HADRON_VERSION} AS base
+ARG VERSION=0.1.0
+COPY --from=fetch /dest/ /
+COPY rootfs/ /
+RUN systemctl enable containerd.service kubelet.service
+
+RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
+    /kairos-init --version "${VERSION}" --stage install
+
+RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
+    /kairos-init --version "${VERSION}" --stage init
+
+FROM base AS test
+RUN set -eux; \
+    kubelet --version | grep -q 'v1.35'; \
+    containerd --version; \
+    runc --version | head -1; \
+    test -x /opt/cni/bin/loopback; \
+    systemctl is-enabled containerd.service kubelet.service; \
+    test -s /etc/kairos-release; \
+    ! command -v kubeadm; \
+    ! command -v k3s

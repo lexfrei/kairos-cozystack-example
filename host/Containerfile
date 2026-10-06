@@ -1,0 +1,59 @@
+# Kairos node image for a Cozystack management cluster on Hadron with k3s.
+# DRBD and ZFS are out-of-tree modules tied to the exact Hadron kernel, so both
+# layers must be built from the toolchain of the same Hadron release.
+ARG HADRON_VERSION=v0.5.3
+ARG KAIROS_INIT=quay.io/kairos/kairos-init:v4.3.0
+ARG DRBD_LAYER=ghcr.io/kairos-io/hadron-layers/drbd:9.3.4
+# Published once kairos-io/hadron-layers#82 is merged; until then build the
+# layer locally, see README.md.
+ARG ZFS_LAYER=ghcr.io/kairos-io/hadron-layers/zfs:2.4.4
+
+FROM ${KAIROS_INIT} AS kairos-init
+FROM ${DRBD_LAYER} AS drbd
+FROM ${ZFS_LAYER} AS zfs
+
+FROM ghcr.io/kairos-io/hadron:${HADRON_VERSION} AS base
+ARG K3S_VERSION=v1.35.8+k3s1
+ARG VERSION=0.1.0
+
+COPY --from=drbd / /
+COPY --from=zfs / /
+COPY rootfs/ /
+
+# /etc/zfs is persistent on an installed Kairos node, but recovery mode and the
+# first boot have no zpool.cache, so pools are also imported by scanning.
+RUN kver=$(ls /usr/lib/modules) \
+    && echo "${kver}" > /kver \
+    && depmod "${kver}" \
+    && systemctl enable iscsid.service multipathd.service zfs-import-scan.service zfs-import.target zfs.target \
+    && systemctl mask drbd.service \
+    && if grep -q '^\s*devices\s*{' /etc/lvm/lvm.conf 2>/dev/null; then \
+         sed --in-place --regexp-extended '/^\s*devices\s*\{/a\        global_filter = [ "r|^/dev/drbd.*|", "r|^/dev/dm-.*|", "r|^/dev/zd.*|", "r|^/dev/loop.*|" ]' /etc/lvm/lvm.conf; \
+       else \
+         mkdir -p /etc/lvm && printf 'devices {\n        global_filter = [ "r|^/dev/drbd.*|", "r|^/dev/dm-.*|", "r|^/dev/zd.*|", "r|^/dev/loop.*|" ]\n}\n' >> /etc/lvm/lvm.conf; \
+       fi \
+    && lvmconfig devices/global_filter | grep -q drbd
+
+RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
+    /kairos-init --version "${VERSION}" --stage install \
+      --provider k3s --provider-k3s-version "${K3S_VERSION}"
+
+RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
+    /kairos-init --version "${VERSION}" --stage init
+
+# Static contract check: a module built for the wrong kernel, or a kairos-init
+# that swaps the kernel, fails here rather than on first boot.
+FROM base AS test
+RUN set -eux; \
+    kver=$(cat /kver); \
+    test "$(ls /usr/lib/modules)" = "${kver}"; \
+    for m in br_netfilter geneve ip_tables iptable_nat openvswitch zfs drbd vhost_net tun; do \
+      modinfo -k "${kver}" "$m" | grep -q '^filename:'; \
+    done; \
+    modinfo -k "${kver}" drbd | grep -E '^version: *9\.'; \
+    modinfo -k "${kver}" zfs | grep -E '^version: *2\.4'; \
+    modinfo -k "${kver}" zfs | grep -q "^vermagic: *${kver} "; \
+    test -s /etc/kairos-release; \
+    command -v k3s zpool drbdadm iscsiadm multipathd; \
+    lvmconfig devices/global_filter; \
+    systemctl is-enabled iscsid.service multipathd.service zfs-import-scan.service zfs-import.target zfs.target
