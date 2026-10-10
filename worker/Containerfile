@@ -9,7 +9,7 @@ FROM ${KAIROS_INIT} AS kairos-init
 
 # The upstream kubelet release binary links against glibc, and Hadron is musl,
 # so kubelet is built from source without cgo, as k3s does.
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.25.11 AS kubelet
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.2 AS kubelet
 ARG KUBERNETES_VERSION=v1.35.6
 ARG TARGETARCH
 WORKDIR /src
