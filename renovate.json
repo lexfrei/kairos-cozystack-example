@@ -1,0 +1,6 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>lexfrei/renovate-config"],
+  "description": "No workflow here runs on pull_request, so renovate would wait forever for a check that never reports. ignoreTests gives up no gate that exists; drop it once this repository gains PR CI.",
+  "ignoreTests": true
+}
