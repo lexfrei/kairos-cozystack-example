@@ -1,22 +1,27 @@
-# Kairos tenant worker on Hadron for Cozystack: kubelet + containerd only.
+# Kairos tenant worker on Hadron for Cozystack: kubelet, kubeadm and containerd.
 # The node joins a Kamaji control plane through kubelet TLS bootstrap with a
-# bootstrap token, the same contract Cozystack's Talos workers use, so there
-# is no kubeadm and no k3s in the image.
+# bootstrap token (join-worker.sh). kubeadm ships for the `kubeadm join` path of
+# cluster-api-provider-kairos, but kubelet.service is not wired for it yet.
+# There is no k3s in the image.
 ARG HADRON_VERSION=v0.5.3
 ARG KAIROS_INIT=quay.io/kairos/kairos-init:v4.3.0
 
 FROM ${KAIROS_INIT} AS kairos-init
 
 # The upstream kubelet release binary links against glibc, and Hadron is musl,
-# so kubelet is built from source without cgo, as k3s does.
+# so kubelet is built from source without cgo, as k3s does. kubeadm comes from
+# the same tree: cluster-api-provider-kairos refuses a join unless kubeadm's
+# version equals the Machine's to the patch.
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.2 AS kubelet
 ARG KUBERNETES_VERSION=v1.35.6
 ARG TARGETARCH
 WORKDIR /src
 RUN curl -fL "https://github.com/kubernetes/kubernetes/archive/refs/tags/${KUBERNETES_VERSION}.tar.gz" | tar -xz --strip-components=1
-RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -trimpath \
-      -ldflags "-s -w -X k8s.io/component-base/version.gitVersion=${KUBERNETES_VERSION} -X k8s.io/component-base/version.gitTreeState=clean" \
-      -o /out/kubelet ./cmd/kubelet
+RUN for c in kubelet kubeadm; do \
+      CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -trimpath \
+        -ldflags "-s -w -X k8s.io/component-base/version.gitVersion=${KUBERNETES_VERSION} -X k8s.io/component-base/version.gitTreeState=clean" \
+        -o "/out/${c}" "./cmd/${c}" || exit 1; \
+    done
 
 FROM ghcr.io/kairos-io/hadron-toolchain:${HADRON_VERSION} AS fetch
 ARG TARGETARCH
@@ -24,7 +29,7 @@ ARG CONTAINERD_VERSION=2.2.9
 ARG RUNC_VERSION=v1.5.2
 ARG CNI_PLUGINS_VERSION=v1.9.1
 WORKDIR /dest
-COPY --from=kubelet /out/kubelet usr/bin/kubelet
+COPY --from=kubelet /out/kubelet /out/kubeadm usr/bin/
 RUN mkdir -p usr/bin usr/sbin opt/cni/bin usr/lib/systemd/system && \
     curl -fL "https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-static-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz" -o /tmp/containerd.tgz && \
     curl -fL "https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-static-${CONTAINERD_VERSION}-linux-${TARGETARCH}.tar.gz.sha256sum" -o /tmp/containerd.sha && \
@@ -41,7 +46,11 @@ FROM ghcr.io/kairos-io/hadron:${HADRON_VERSION} AS base
 ARG VERSION=0.1.0
 COPY --from=fetch /dest/ /
 COPY rootfs/ /
-RUN systemctl enable containerd.service kubelet.service
+# yip creates a missing parent directory from the file's mode plus owner
+# execute (0644 gives 0744), so systemd-resolved could not enter a directory
+# created for a cloud-config drop-in.
+RUN systemctl enable containerd.service kubelet.service \
+    && install -d -m 0755 /etc/systemd/resolved.conf.d
 
 RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
     /kairos-init --version "${VERSION}" --stage install
@@ -57,5 +66,6 @@ RUN set -eux; \
     test -x /opt/cni/bin/loopback; \
     systemctl is-enabled containerd.service kubelet.service; \
     test -s /etc/kairos-release; \
-    ! command -v kubeadm; \
+    test "$(kubeadm version --output short)" = "$(kubelet --version | cut -d' ' -f2)"; \
+    find /etc/systemd/resolved.conf.d -maxdepth 0 -type d -perm 0755 | grep -q .; \
     ! command -v k3s

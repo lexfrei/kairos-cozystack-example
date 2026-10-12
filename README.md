@@ -3,7 +3,7 @@
 Kairos images for [Cozystack](https://cozystack.io), built on [Hadron](https://github.com/kairos-io/hadron). This is an experiment, not a supported install path.
 
 - `host/` is a management cluster node: k3s, DRBD and ZFS modules, iSCSI, multipath, and the kernel modules and sysctl settings Cozystack needs. It covers the node preparation that [ansible-cozystack](https://github.com/cozystack/ansible-cozystack) does on Ubuntu.
-- `worker/` is a tenant Kubernetes worker that runs as a KubeVirt VM and joins a Kamaji control plane. It carries kubelet and containerd only, with no kubeadm and no k3s.
+- `worker/` is a tenant Kubernetes worker that runs as a KubeVirt VM and joins a Kamaji control plane. It carries kubelet, kubeadm and containerd, and no k3s.
 
 ## Build
 
@@ -22,7 +22,7 @@ The worker image builds on its own:
 docker buildx build --load --tag cozystack-worker:0.1.0 --file worker/Containerfile worker
 ```
 
-Both Containerfiles have a `test` target with static checks: modules match the kernel, units are enabled, kubeadm and k3s are absent from the worker.
+Both Containerfiles have a `test` target with static checks: modules match the kernel, units are enabled, the worker's kubeadm matches its kubelet and k3s is absent.
 
 To get a raw EFI disk, run AuroraBoot with `raw-disk.yaml` after putting your SSH key in it. A raw disk boots into recovery, and that file makes the first boot reset into the installed system. The image name needs a path, `docker://name:tag` without one fails to parse.
 
@@ -46,6 +46,10 @@ Kernel 7.2 in Hadron v0.5.3 needs Cilium 1.18.14, 1.19.8, 1.20.2 or newer ([cili
 ## Worker
 
 `worker/join-worker.sh` creates a bootstrap token in the tenant cluster, renders NoCloud user-data with the CA, the bootstrap kubeconfig and the tenant's `kubelet-config`, and creates the VM. The join stage runs only on the installed system, never in recovery. Kamaji approves the kubelet CSR by itself.
+
+The image also carries kubeadm, built from the same Kubernetes tag as kubelet, for the `kubeadm join` path of [kairos-io/cluster-api-provider-kairos#141](https://github.com/kairos-io/cluster-api-provider-kairos/pull/141). That path does not work yet: `kubelet.service` is set up for `join-worker.sh` only.
+
+The image ships an empty `/etc/systemd/resolved.conf.d` with mode 0755. Without it, a cloud-config file placed there would make yip create the directory from the file's mode plus owner execute (0744 for a 0644 file), and systemd-resolved could not read the drop-in.
 
 The worker raw disk goes to the VM as a container disk:
 
