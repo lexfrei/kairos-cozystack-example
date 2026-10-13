@@ -87,10 +87,6 @@ $(printf '%s\n' "$ca" | indent)
           permissions: 0644
           content: |
 $(printf '%s\n' "$kubelet_cfg" | indent)
-        - path: /etc/kubernetes/kubelet.env
-          permissions: 0644
-          content: |
-            NODE_NAME=${name}
       commands:
         - systemctl restart kubelet
 EOF

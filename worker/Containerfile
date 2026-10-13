@@ -1,8 +1,9 @@
 # Kairos tenant worker on Hadron for Cozystack: kubelet, kubeadm and containerd.
 # The node joins a Kamaji control plane through kubelet TLS bootstrap with a
-# bootstrap token (join-worker.sh). kubeadm ships for the `kubeadm join` path of
-# cluster-api-provider-kairos, but kubelet.service is not wired for it yet.
-# There is no k3s in the image.
+# bootstrap token (join-worker.sh). kubelet.service uses kubeadm's file layout
+# so that `kubeadm join` from cluster-api-provider-kairos writes the same
+# paths; that path is untested until a first live join. There is no k3s in
+# the image.
 ARG HADRON_VERSION=v0.5.3
 ARG KAIROS_INIT=quay.io/kairos/kairos-init:v4.3.0
 
@@ -68,4 +69,13 @@ RUN set -eux; \
     test -s /etc/kairos-release; \
     test "$(kubeadm version --output short)" = "$(kubelet --version | cut -d' ' -f2)"; \
     find /etc/systemd/resolved.conf.d -maxdepth 0 -type d -perm 0755 | grep -q .; \
+    for s in 'EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env' 'EnvironmentFile=-/etc/sysconfig/kubelet' \
+             '--kubeconfig=/etc/kubernetes/kubelet.conf' '$KUBELET_KUBEADM_ARGS' \
+             'cp -p /var/lib/kubelet/kubeconfig /etc/kubernetes/kubelet.conf'; do \
+      grep -q -F -e "$s" /usr/lib/systemd/system/kubelet.service; \
+    done; \
+    for s in 'EnvironmentFile=/etc/kubernetes/kubelet.env' '--kubeconfig=/var/lib/kubelet/kubeconfig'; do \
+      if grep -q -F -e "$s" /usr/lib/systemd/system/kubelet.service; then echo "stale unit line: $s" >&2; exit 1; fi; \
+    done; \
+    if grep -q '^ConditionPathExists' /usr/lib/systemd/system/kubelet.service; then echo "stale unit line: ConditionPathExists" >&2; exit 1; fi; \
     ! command -v k3s

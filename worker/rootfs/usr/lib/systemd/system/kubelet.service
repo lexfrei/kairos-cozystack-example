@@ -1,20 +1,25 @@
 [Unit]
 Description=Kubernetes kubelet
+Documentation=https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-init/#kubelet-drop-in
 Wants=network-online.target containerd.service
 After=network-online.target containerd.service
-# Starts only once cloud-config has handed the node its join material, so a
-# fresh or recovery boot never registers a half-configured Node.
-ConditionPathExists=|/etc/kubernetes/bootstrap-kubelet.conf
-ConditionPathExists=|/var/lib/kubelet/kubeconfig
+# Until a join writes /var/lib/kubelet/config.yaml kubelet exits and is
+# restarted every RestartSec. No start limit, as in the upstream kubelet.service.
+StartLimitIntervalSec=0
 
 [Service]
-EnvironmentFile=/etc/kubernetes/kubelet.env
-ExecStart=/usr/bin/kubelet \
-  --config=/var/lib/kubelet/config.yaml \
-  --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf \
-  --kubeconfig=/var/lib/kubelet/kubeconfig \
-  --container-runtime-endpoint=unix:///run/containerd/containerd.sock \
-  --hostname-override=${NODE_NAME}
+# Same layout as the upstream 10-kubeadm.conf, so `kubeadm join` and
+# join-worker.sh share the paths. kubeadm writes kubeadm-flags.env;
+# /etc/sysconfig/kubelet is for the operator, and unlike /etc/default it
+# survives a reboot on Kairos.
+Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
+Environment="KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml"
+EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
+EnvironmentFile=-/etc/sysconfig/kubelet
+# Nodes joined by earlier images keep their kubeconfig in /var/lib/kubelet;
+# without this copy they would re-bootstrap with an expired token.
+ExecStartPre=-/bin/sh -c 'test -e /etc/kubernetes/kubelet.conf || ! test -e /var/lib/kubelet/kubeconfig || cp -p /var/lib/kubelet/kubeconfig /etc/kubernetes/kubelet.conf'
+ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
 Restart=always
 RestartSec=10
 
