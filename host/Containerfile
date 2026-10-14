@@ -1,7 +1,7 @@
 # Kairos node image for a Cozystack management cluster on Hadron with k3s.
 # DRBD and ZFS are out-of-tree modules tied to the exact Hadron kernel, so both
 # layers must be built from the toolchain of the same Hadron release.
-ARG HADRON_VERSION=v0.5.3
+ARG HADRON_VERSION=v0.6.0
 ARG KAIROS_INIT=quay.io/kairos/kairos-init:v4.3.0
 ARG DRBD_LAYER=ghcr.io/kairos-io/hadron-layers/drbd:9.3.4
 # Published once kairos-io/hadron-layers#82 is merged; until then build the
