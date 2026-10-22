@@ -2,7 +2,7 @@
 # The node joins a Kamaji control plane through kubelet TLS bootstrap with a
 # bootstrap token, the same contract Cozystack's Talos workers use, so there
 # is no kubeadm and no k3s in the image.
-ARG HADRON_VERSION=v0.6.1
+ARG HADRON_VERSION=v0.6.2
 ARG KAIROS_INIT=quay.io/kairos/kairos-init:v4.3.0
 
 FROM ${KAIROS_INIT} AS kairos-init
