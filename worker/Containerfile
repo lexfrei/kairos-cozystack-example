@@ -3,7 +3,7 @@
 # bootstrap token, the same contract Cozystack's Talos workers use, so there
 # is no kubeadm and no k3s in the image.
 ARG HADRON_VERSION=v0.6.3
-ARG KAIROS_INIT=quay.io/kairos/kairos-init:v4.3.0
+ARG KAIROS_INIT=quay.io/kairos/kairos-init:v4.4.0
 
 FROM ${KAIROS_INIT} AS kairos-init
 
